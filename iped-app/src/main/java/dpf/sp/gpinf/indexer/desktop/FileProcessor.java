@@ -54,7 +54,7 @@ public class FileProcessor extends CancelableWorker<Void, Void> implements IFile
 
     private static int STATUS_LENGTH = 200;
     private volatile static FileProcessor parsingTask;
-    private static Object lock = new Object(), openEvidenceLock = new Object();
+    private static Object lock = new Object(), lock2 = new Object();
     private static HashSet<String> dataSourceOpened = new HashSet<String>();
 
     private Document doc;
@@ -67,6 +67,11 @@ public class FileProcessor extends CancelableWorker<Void, Void> implements IFile
         this.docId = docId;
 
         App.get().setLastSelectedDoc(docId);
+
+        if (parsingTask != null) {
+            parsingTask.cancel(true);
+        }
+        parsingTask = this;
 
         if (docId >= 0) {
             try {
@@ -110,14 +115,6 @@ public class FileProcessor extends CancelableWorker<Void, Void> implements IFile
     @Override
     protected Void doInBackground() {
 
-        if (parsingTask != null) {
-            // see https://github.com/sepinf-inc/IPED/issues/1099 why this lock is needed
-            synchronized (openEvidenceLock) {
-                parsingTask.cancel(true);
-            }
-        }
-        parsingTask = this;
-
         synchronized (lock) {
 
             if (this.isCancelled()) {
@@ -135,7 +132,7 @@ public class FileProcessor extends CancelableWorker<Void, Void> implements IFile
         return null;
     }
 
-    private void process() throws InterruptedException {
+    private void process() {
 
         LOGGER.info("Opening " + doc.get(IndexItem.PATH)); //$NON-NLS-1$
 
@@ -163,7 +160,7 @@ public class FileProcessor extends CancelableWorker<Void, Void> implements IFile
             viewItem = IndexItem.getItem(doc, iCase, true);
         }
 
-        waitEvidenceOpening(item);
+        waitSleuthkitInit(item);
 
         Set<String> highlights = new HashSet<>();
         highlights.addAll(App.get().getHighlightTerms());
@@ -190,25 +187,20 @@ public class FileProcessor extends CancelableWorker<Void, Void> implements IFile
         }
     }
 
-    private void waitEvidenceOpening(final IItem item) throws InterruptedException {
+    private void waitSleuthkitInit(final IItem item) {
         ISeekableInputStreamFactory factory = item.getInputStreamFactory();
         if (!(factory instanceof SleuthkitInputStreamFactory) && !(factory instanceof ZIPInputStreamFactory)
                 && !(factory instanceof AD1InputStreamFactory)) {
             return;
         }
         if (!dataSourceOpened.contains(item.getDataSource().getUUID())) {
-            synchronized (openEvidenceLock) {
-                if (Thread.interrupted()) {
-                    throw new InterruptedException();
-                }
-                setWaitVisible(true);
-                try (InputStream is = item.getSeekableInputStream()) {
-                    is.read();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                } finally {
-                    setWaitVisible(false);
-                }
+            setWaitVisible(true);
+            try (InputStream is = item.getSeekableInputStream()) {
+                is.read();
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                setWaitVisible(false);
             }
             dataSourceOpened.add(item.getDataSource().getUUID());
         }
